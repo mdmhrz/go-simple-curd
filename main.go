@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -16,27 +15,6 @@ type User struct {
 	Name  string `json:"name"`
 	Age   int    `json:"age"`
 	Email string `json:"email"`
-}
-
-var users = []User{
-	{
-		Id:    1,
-		Name:  "Kalam",
-		Age:   25,
-		Email: "kalam@example.com",
-	},
-	{
-		Id:    2,
-		Name:  "Salam",
-		Age:   29,
-		Email: "salam@example.com",
-	},
-	{
-		Id:    3,
-		Name:  "Alam",
-		Age:   20,
-		Email: "alam@example.com",
-	},
 }
 
 var db *pgx.Conn
@@ -166,26 +144,40 @@ func getUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserById(w http.ResponseWriter, r *http.Request) {
-	idParams := r.PathValue("id")
+	idParam := r.PathValue("id")
 
-	id, err := strconv.Atoi(idParams)
+	id, err := strconv.Atoi(idParam)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintln(w, "Invalid user id")
+		http.Error(w, "Invalid user id", http.StatusBadRequest)
 		return
 	}
 
-	for _, user := range users {
-		if user.Id == id {
-			w.Header().Set("Content-Type", "Application/json")
-			json.NewEncoder(w).Encode(user)
-			return
-		}
+	var user User
+
+	query := `
+		SELECT id, username, age, email
+		FROM users
+		WHERE id = $1
+	`
+
+	err = db.QueryRow(
+		context.Background(),
+		query,
+		id,
+	).Scan(
+		&user.Id,
+		&user.Name,
+		&user.Age,
+		&user.Email,
+	)
+
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
 	}
 
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintln(w, "User not found")
-
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
 }
 
 func updateUserById(w http.ResponseWriter, r *http.Request) {
@@ -244,16 +236,22 @@ func deleteUserById(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for idx, user := range users {
-		if user.Id == id {
-			// users = append(users[:idx], users[idx+1:]...)
-			users = slices.Delete(users, idx, idx+1)
-			w.WriteHeader(http.StatusNoContent)
-			fmt.Fprintln(w, "User information deleted")
-			return
-		}
+	query := `delete from users where id = $1`
+	cmdTag, err := db.Exec(context.Background(), query, id)
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "Could not delete user")
+		return
 	}
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintln(w, "User not found")
+
+	if cmdTag.RowsAffected() != 1 {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintln(w, "User not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	fmt.Fprintln(w, "User deleted successfully")
 
 }
